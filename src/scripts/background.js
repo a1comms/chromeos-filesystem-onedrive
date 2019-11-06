@@ -13,14 +13,52 @@ const background = () => {
 
     const onedrive_fs_ = new OneDriveFS();
 
-    const openWindow = () => {
-        chrome.app.window.create('window.html', {
-            outerBounds: {
-                width: 600,
-                height: 350
-            },
-            resizable: false
-        });
+    const openWindow = (launchData) => {
+        try {
+            if (launchData.source == 'file_handler') {
+                console.log("file opened");
+                console.log(launchData);
+                
+                launchData.items[0].entry.file(function(file) {
+                    var reader = new FileReader();
+                
+                    reader.onloadend = function(e) {
+                        var result = e.target.result;
+
+                        console.log('READ WEBLINK FILE');
+                        console.log(e);
+
+                        try {
+                            chrome.browser.openTab({
+                                url: result
+                            })
+                        } catch (e) {
+                            console.log(e);
+
+                            if (Raven.isSetup()) {
+                                Raven.captureException(e, {});
+                            }
+                        }
+                    };
+                
+                    console.log(reader.readAsText(file));
+                });
+            } else {
+                chrome.app.window.create('window.html', {
+                    outerBounds: {
+                        width: 600,
+                        height: 350
+                    },
+                    resizable: false
+                });
+            }
+        } catch (e) {
+            console.log(e);
+            
+            if (Raven.isSetup()) {
+                Raven.captureException(e, {});
+            }
+        }
     };
 
     chrome.app.runtime.onLaunched.addListener(openWindow);

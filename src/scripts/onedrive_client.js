@@ -354,9 +354,18 @@ class OneDriveClient {
             });
             return;
         }
+        const webLinkSearch = /\.onedriveweblink$/;
+        var isWebLink = false;
+        if (webLinkSearch.test(path)) {
+            isWebLink = true;
+            path = path.replace(webLinkSearch, "");
+        }
         const fetchingMetadataObject = this.createFetchingMetadataObject(path);
         new HttpFetcher(this, 'getMetadata', fetchingMetadataObject, fetchingMetadataObject.data, result => {
             console.log('metadataobject - isDirectory:' + ('folder' in result) + 'XXX');
+            if (isWebLink) {
+                result.size = 4096;
+            }
             const entryMetadata = {
                 isDirectory: ('folder' in result),
                 name: result.name,
@@ -446,36 +455,56 @@ class OneDriveClient {
 
     readFile(filePath, offset, length, successCallback, errorCallback) {
         const data = JSON.stringify({path: filePath});
+        const range = 'bytes=' + offset + '-' + (offset + length - 1);
         if (offset > 0) {
             console.log("readFile:: Offset reads are not currently supported");
-            errorCallback();
+            errorCallback('EOF');
             return;
         }
-        const range = 'bytes=' + offset + '-' + (offset + length - 1);
-        new HttpFetcher(this, 'readFile', {
-            type: 'GET',
-            url: "https://graph.microsoft.com/v1.0/me/drive/root:" + filePath + "?select=id,@microsoft.graph.downloadUrl",
-            headers: {
-                'Authorization': 'Bearer ' + this.access_token_,
-            }
-        }, {
-            data: data,
-            range: range
-        }, result => {
-            console.log("starting download")
-            console.log(result);
+        const webLinkSearch = /\.onedriveweblink$/;
+        if (webLinkSearch.test(filePath)) {
             new HttpFetcher(this, 'readFile', {
                 type: 'GET',
-                url: result["@microsoft.graph.downloadUrl"],
-                dataType: 'binary',
-                responseType: 'arraybuffer'
+                url: "https://graph.microsoft.com/v1.0/me/drive/root:" + filePath.replace(webLinkSearch, "") + "?select=id,webUrl",
+                headers: {
+                    'Authorization': 'Bearer ' + this.access_token_,
+                }
             }, {
                 data: data,
                 range: range
-            }, result2 => {
-                successCallback(result2, false);
+            }, result => {
+                console.log("starting web link open")
+                console.log(result);
+                var enc = new TextEncoder();
+                var strEnc = enc.encode(result.webUrl.padEnd(4096));
+                successCallback(strEnc.buffer, false);
             }, errorCallback).fetch();
-        }, errorCallback).fetch();
+        } else {
+            new HttpFetcher(this, 'readFile', {
+                type: 'GET',
+                url: "https://graph.microsoft.com/v1.0/me/drive/root:" + filePath + "?select=id,@microsoft.graph.downloadUrl",
+                headers: {
+                    'Authorization': 'Bearer ' + this.access_token_,
+                }
+            }, {
+                data: data,
+                range: range
+            }, result => {
+                console.log("starting download")
+                console.log(result);
+                new HttpFetcher(this, 'readFile', {
+                    type: 'GET',
+                    url: result["@microsoft.graph.downloadUrl"],
+                    dataType: 'binary',
+                    responseType: 'arraybuffer'
+                }, {
+                    data: data,
+                    range: range
+                }, result2 => {
+                    successCallback(result2, false);
+                }, errorCallback).fetch();
+            }, errorCallback).fetch();
+        }
     }
 
     createDirectory(directoryPath, successCallback, errorCallback) {
@@ -983,12 +1012,23 @@ class OneDriveClient {
         } else {
             const content = contents[index];
             console.log('createEntryMetadatas - isDirectory:' + ("folder" in content) + "YYY");
-            const entryMetadata = {
-                isDirectory: ('folder' in content),
-                name: content.name,
-                size: content.size || 0,
-                modificationTime: content.lastModifiedDateTime ? new Date(content.lastModifiedDateTime) : new Date()
-            };
+            var entryMetadata = {};
+            if (('package' in content) && (!('@microsoft.graph.downloadUrl' in content))) {
+                entryMetadata = {
+                    isDirectory: false,
+                    name: content.name + ".onedriveweblink",
+                    size: 4096,
+                    modificationTime: content.lastModifiedDateTime ? new Date(content.lastModifiedDateTime) : new Date()
+                };
+            } else {
+                entryMetadata = {
+                    isDirectory: ('folder' in content),
+                    name: content.name,
+                    size: content.size || 0,
+                    modificationTime: content.lastModifiedDateTime ? new Date(content.lastModifiedDateTime) : new Date()
+                };
+            }
+            
             entryMetadatas.push(entryMetadata);
             this.createEntryMetadatas(contents, ++index, entryMetadatas, successCallback, errorCallback);
         }
